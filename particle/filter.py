@@ -145,8 +145,8 @@ def generate_route(le_map, n_step=1000, v=None, dt=1):
     # move the particle randomly about the space
     i_step = 0
     while i_step < n_step:
-        u = np.array([0.5 * np.pi * np.random.randn(), v])
-        Q = np.array([0.1 * np.pi, 0.1 * v])
+        u = np.array([0.4 * np.pi * np.random.randn(), v])
+        Q = np.array([0.08 * np.pi, 0.1 * v])
         candidate_state = predict(state, u, Q, le_map, dt)
         if not candidate_state[:, 3].any():
             state = candidate_state

@@ -1,6 +1,6 @@
 """Functions to load map."""
 import numpy as np
-from os.path import abspath, dirname, exists, join
+from os.path import abspath, dirname, exists, join, splitext
 from scipy.misc import imread
 from typing import Dict, List
 
@@ -13,6 +13,8 @@ def get_paths():
     paths['project'] = dirname(paths['package'])
     paths['notebooks'] = join(paths['project'], 'notebooks')
     paths['data'] = join(paths['project'], 'data')
+    paths['images'] = join(paths['data'], 'images')
+    paths['routes'] = join(paths['data'], 'routes')
 
     for v in paths.values():
         assert(exists(v))
@@ -27,8 +29,8 @@ def load_map(imname):
     it is impassable should be a zero.
     """
     p = get_paths()
-    impath = join(p['data'], imname)
+    impath = join(p['images'], imname)
     im = imread(impath, flatten=True, mode='L')
-    if imname in ['maze.jpg']:
+    if splitext(imname)[1] in ['.jpg']:
         im = im < 150
     return im
