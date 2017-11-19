@@ -1,5 +1,6 @@
 """Functions for particle filter of simple 2D robot."""
 import numpy as np
+from typing import List
 
 def predict(state_in, u, Q, le_map, dt=1.0):
     """Predict next stage of robot movement (turn, then jump).
@@ -123,12 +124,34 @@ def is_obstructed(state: np.ndarray, jump: float, le_map: np.ndarray) -> bool:
 
 
 def generate_route(le_map, n_step=1000, v=None, dt=1):
-    """Generate a route for a robot through a given map."""
+    """Generate a route for a robot through a given map.
+
+    Parameters
+    ----------
+    le_map: np.ndarray
+    n_step: int
+    v: float
+    dt: float
+
+    Returns
+    -------
+    state_history:
+    process_model:
+    Q:
+    dt:
+
+    """
     height, width = np.shape(le_map)  # extent of map
 
     # default speed is 50th of the map size
     if v is None:
         v = max(height / 20, width/20, 5)
+
+    # define process noise
+    Q = np.array([0.08 * np.pi, 0.1 * v])
+
+    # initialise empty motion observations array
+    process_model = np.empty([n_step - 1, 2])
 
     # init random starting position, ensuring we don't start inside a wall
     start_passable = False
@@ -140,20 +163,23 @@ def generate_route(le_map, n_step=1000, v=None, dt=1):
     bearing = np.pi * np.random.rand()
     gone_through_wall = False
     state = np.array([[bearing, x0[0], x0[1], gone_through_wall]])
-    route = np.empty((n_step, np.shape(state)[1]))
+
+    # init state history with first state
+    state_history = np.empty((n_step, np.shape(state)[1]))
+    state_history[0, :] = state
 
     # move the particle randomly about the space
     i_step = 0
-    while i_step < n_step:
+    while i_step < n_step - 1:
         u = np.array([0.4 * np.pi * np.random.randn(), v])
-        Q = np.array([0.08 * np.pi, 0.1 * v])
         candidate_state = predict(state, u, Q, le_map, dt)
         if not candidate_state[:, 3].any():
             state = candidate_state
-            route[i_step, :] = candidate_state[0, :]
+            state_history[i_step + 1, :] = candidate_state[0, :]
+            process_model[i_step, :] = u
             i_step = i_step + 1
 
-    return route
+    return state_history, process_model, Q, dt
 
 if __name__ == '__main__':
     state = np.array([0.0 * np.pi, 0, 0])
