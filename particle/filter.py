@@ -62,7 +62,7 @@ def predict(state_in, u, Q, le_map, dt=1.0):
 
 def get_track(start_position, bearing, jump):
     """Get pixel ids corresponding to a track."""
-    dr = min(0.1, 0.5* jump)
+    dr = min(0.1, 0.5 * jump)
     steps = np.arange(0, jump + dr, dr)  # increment tracks by 0.1 pixel to be exhaustive
     track = np.array([start_position + r * np.array([np.cos(bearing), np.sin(bearing)])
                       for r in steps])
