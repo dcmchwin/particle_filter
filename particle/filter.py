@@ -1,6 +1,13 @@
 """Functions for particle filter of simple 2D robot."""
+import logging
 import numpy as np
 from typing import List
+
+logger = logging.Logger(__file__)
+logger.setLevel(logging.INFO)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+logger.addHandler(ch)
 
 def predict(state_in, u, Q, le_map, dt=1.0):
     """Predict next stage of robot movement (turn, then jump).
@@ -33,8 +40,8 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     x = state_in.copy()
 
     # Generate random elements of update in bearing change and speed
-    q0 = Q[0] * np.random.rand()
-    q1 = Q[1] * np.random.randn()
+    q0 = Q[0] * np.random.rand(state_in.shape[0])
+    q1 = Q[1] * np.random.randn(state_in.shape[0])
 
     # Get jumps
     dphi = dt * (u[0] + q0)
@@ -48,7 +55,7 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     # Evaluate whether or not any particles have performed an impossible journey
     # (i.e. been blocked by a wall)
     for i in range(np.shape(x)[0]):
-        x[i, 3] = is_obstructed(x[i, :3], dr, le_map)
+        x[i, 3] = is_obstructed(x[i, :3], dr[i], le_map)
 
     # Jump along new bearing
     x[:, 1] = x[:, 1] + dr * np.cos(x[:, 0])
@@ -180,6 +187,46 @@ def generate_route(le_map, n_step=1000, v=None, dt=1):
             i_step = i_step + 1
 
     return state_history, process_model, Q, dt
+
+
+def update(pop_in):
+    """Update the particle states across the whole population.
+
+    Assumes that the 'predict' state has just been wrong. Process is to:
+    1. Remove all particles that have gone somewhere impassable
+    2. Replace them with copies of a random draw of the remaining particles
+
+    Parameters
+    ----------
+    pop_in: np.ndarray
+        n x 4 array of particles
+
+    Returns
+    -------
+    pop_out: np.ndarray
+        n x 4 array of particles
+    """
+    pop_out = pop_in.copy()
+
+    # get indices of particles to remove, and which ones to use as replacement
+    is_blocked = pop_in[:, 3]
+    idx_to_remove = np.nonzero(is_blocked)[0]
+    idx_remaining = np.nonzero(-is_blocked + 1)[0]
+
+    if len(idx_to_remove) == 0:
+        pass
+    elif len(idx_remaining) == 0:
+        logger.error("All particles obstructed")
+        raise ValueError("All particles obstructed")
+    else:
+        idx_replace = np.random.choice(idx_remaining, idx_to_remove.shape)
+
+        # do resampling: replace all excludable particles with a random
+        # choice of remaining allowed particles
+        pop_out[idx_to_remove, :] = pop_in[idx_replace, :]
+
+    return pop_out
+
 
 if __name__ == '__main__':
     state = np.array([0.0 * np.pi, 0, 0])
