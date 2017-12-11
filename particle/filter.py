@@ -31,8 +31,6 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     -------
     state_out: np.ndarray
         output state
-    debug_info: object
-        debug information
 
     """
     # account for input dimensionality
@@ -49,8 +47,6 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     dphi = dt * (u[0] + q0)
     jump = dt * (u[1] + q1)
 
-    logger.debug('jump: {}'.format(jump))
-
     # Use jumps to update state
     # Turn
     x[:, 0] = state_in[:, 0] + dphi
@@ -58,28 +54,16 @@ def predict(state_in, u, Q, le_map, dt=1.0):
 
     # Evaluate whether or not any particles have performed an impossible journey
     # (i.e. been blocked by a wall)
-    # TODO: Vectorise, for the love of God, vectorise!
-    # for i in range(np.shape(x)[0]):
-    #     x[i, 3] = is_obstructed(x[i, :3], dr[i], le_map)
-
-    logger.debug('Is blocked before is_obstructed: {}'.format(x[:, 3]))
-
-    x[:, 3], debug_info = is_obstructed(x[:, :3], jump, le_map)
-
-    logger.debug('Is blocked after is_obstructed: {}'.format(x[:, 3]))
-
-    logger.debug('First five particle positions pre-predict:\n{}'.format(x[:5, 1:3].T))
+    x[:, 3] = is_obstructed(x[:, :3], jump, le_map)
 
     # Jump along new bearing
     x[:, 1] = x[:, 1] + jump * np.cos(x[:, 0])
     x[:, 2] = x[:, 2] + jump * np.sin(x[:, 0])
     x[:, 1:3] = x[:, 1:3].round().astype('int')
 
-    logger.debug('First five particle positions post-predict:\n {}'.format(x[:5, 1:3].T))
-
     state_out = x
 
-    return state_out, debug_info
+    return state_out
 
 
 def get_single_track(start_position, bearing, jump):
@@ -100,14 +84,6 @@ def get_single_track(start_position, bearing, jump):
         [n_particles, n_dimensions, n_pixels] array of track start positions
         as integers
     """
-
-    # logging.debug('start_position.shape: {}'.format(start_position.shape))
-    # logging.debug('bearing.shape {}: '.format(bearing.shape))
-    # logging.debug('jump.shape {}: '.format(jump.shape))
-
-    logger.info('Track start positions in get_single_track:\n {}'.
-                format(start_position.T))
-
     # ensure that maximum step size is 0.3, or half the total jump distance
     min_increment_scalar = 0.3
     dr = np.where(jump > 2 * min_increment_scalar, min_increment_scalar, 0.5 * jump)
@@ -129,14 +105,6 @@ def get_single_track(start_position, bearing, jump):
 
     # In getting unique elements, the number of steps will reduce
     track = np.unique(track.round().astype('int'), axis=2)
-
-    # steps = np.arange(0, jump + dr, dr)  # increment tracks by 0.1 pixel to be exhaustive
-    # track = np.array([start_position + r * np.array([np.cos(bearing), np.sin(bearing)])
-    #                   for r in steps])
-    # track = track.round().astype('int')
-    # track = np.unique(track, axis=0)
-
-    # logging.debug('track.shape: {}'.format(track.shape))
 
     return track
 
@@ -196,11 +164,7 @@ def combine_tracks(track_upper: np.ndarray, track_lower: np.ndarray):
         tracks for each particle in state. Shape of this array is
         (nParticles, nDims, nSteps_lower + nSteps_upper)
     """
-
     # combine the parallel tracks
-    # track = np.unique(np.concatenate((track_upper, track_lower), axis=2),
-    #                   axis=0)
-
     track = np.concatenate((track_upper, track_lower), axis=2)
     return track
 
@@ -233,16 +197,8 @@ def is_obstructed(state: np.ndarray, jump: np.ndarray, le_map: np.ndarray) -> bo
     # two parallel pixel tracks from these starting points
     track_upper, track_lower = get_parallel_tracks(state, jump)
 
-    logger.info('track_upper start positions in is_obstructed:\n {}'.
-                format(track_upper[:, :, 0].T))
-
     # combine the parallel tracks
     track = combine_tracks(track_upper, track_lower)
-
-    logger.info('Track start positions in is_obstructed:\n {}'.
-                format(track[:, :, 0].T))
-
-    # logger.debug('track[0, :, :]: {}'.format(track[0, :, :]))
 
     ## Now use tracks to calculate 'blockedness'
 
@@ -252,48 +208,13 @@ def is_obstructed(state: np.ndarray, jump: np.ndarray, le_map: np.ndarray) -> bo
     le_map_padded = np.pad(le_map, pad_width,
                            'constant', constant_values=True)
 
-    logger.debug('pad_width: {}'.format(pad_width))
-    logger.debug('le_map.shape: {}'.format(le_map.shape))
-    logger.debug('le_map_padded.shape: {}'.format(le_map_padded.shape))
-
     # We have to update the indices of the tracks to account for the pad width
     track_padded = track + pad_width
 
     blocked = le_map_padded[track_padded[:, 0, :],
                             track_padded[:, 1, :]].any(axis=1)
 
-    logger.debug('blocked: {}'.format(blocked))
-
-    # # a track that has gone off the map must be blocked
-    # off_map_left_or_under = (track < 0).any(axis=2).any(axis=1)
-    # off_map_above = (track[:, 0, :] > m).any(axis=1)
-    # off_map_right = (track[:, 1, :] > n).any(axis=1)
-    #
-    # # a track that has gone inside an obstacle is blocked
-    # inside_obstacle = le_map[track[:, 0, :], track[:, 1, :]].any(axis=1)
-    #
-    # blocked = np.vstack(Sff_map_left_or_under,
-    #                      off_map_above,
-    #                      off_map_right,
-    #                      inside_obstacle]).any(axis=0)
-
-    logger.debug('blocked.shape: {}'.format(blocked.shape))
-
-    # if (track < 0).any() or (track[:, 0] >= m).any() or (track[:, 1] >= n).any():
-    #     blocked = True
-    # else:
-    #     # get the passability values from the map
-    #     track_blocked = le_map[track[:, 0], track[:, 1]]
-    #     if track_blocked.any():
-    #         blocked = True
-    #     else:
-    #         blocked = False
-
-    debug_info = dict(track=track,
-                      le_map_padded=le_map_padded,
-                      track_padded=track_padded)
-
-    return blocked, debug_info
+    return blocked
 
 
 def generate_route(le_map, n_step=1000, v=None, dt=1):
@@ -390,9 +311,6 @@ def update(pop_in):
         # do resampling: replace all excludable particles with a random
         # choice of remaining allowed particles
         pop_out[idx_to_remove, :] = pop_in[idx_replace, :]
-
-    logger.debug('First five particle positions pre-update:\n {}'.format(pop_in[:5, 1:3].T))
-    logger.debug('First five particle positions post-update:\n {}'.format(pop_out[:5, 1:3].T))
 
     return pop_out
 
