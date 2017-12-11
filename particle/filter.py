@@ -6,7 +6,7 @@ from typing import List
 logger = logging.Logger(__file__)
 logger.setLevel(logging.INFO)
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.DEBUG)
 logger.addHandler(ch)
 
 def predict(state_in, u, Q, le_map, dt=1.0):
@@ -31,6 +31,8 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     -------
     state_out: np.ndarray
         output state
+    debug_info: object
+        debug information
 
     """
     # account for input dimensionality
@@ -45,7 +47,9 @@ def predict(state_in, u, Q, le_map, dt=1.0):
 
     # Get jumps
     dphi = dt * (u[0] + q0)
-    dr = dt * (u[1] + q1)
+    jump = dt * (u[1] + q1)
+
+    logger.debug('jump: {}'.format(jump))
 
     # Use jumps to update state
     # Turn
@@ -54,80 +58,242 @@ def predict(state_in, u, Q, le_map, dt=1.0):
 
     # Evaluate whether or not any particles have performed an impossible journey
     # (i.e. been blocked by a wall)
-    for i in range(np.shape(x)[0]):
-        x[i, 3] = is_obstructed(x[i, :3], dr[i], le_map)
+    # TODO: Vectorise, for the love of God, vectorise!
+    # for i in range(np.shape(x)[0]):
+    #     x[i, 3] = is_obstructed(x[i, :3], dr[i], le_map)
+
+    logger.debug('Is blocked before is_obstructed: {}'.format(x[:, 3]))
+
+    x[:, 3], debug_info = is_obstructed(x[:, :3], jump, le_map)
+
+    logger.debug('Is blocked after is_obstructed: {}'.format(x[:, 3]))
+
+    logger.debug('First five particle positions pre-predict:\n{}'.format(x[:5, 1:3].T))
 
     # Jump along new bearing
-    x[:, 1] = x[:, 1] + dr * np.cos(x[:, 0])
-    x[:, 2] = x[:, 2] + dr * np.sin(x[:, 0])
+    x[:, 1] = x[:, 1] + jump * np.cos(x[:, 0])
+    x[:, 2] = x[:, 2] + jump * np.sin(x[:, 0])
     x[:, 1:3] = x[:, 1:3].round().astype('int')
+
+    logger.debug('First five particle positions post-predict:\n {}'.format(x[:5, 1:3].T))
 
     state_out = x
 
-    return state_out
+    return state_out, debug_info
 
 
-def get_track(start_position, bearing, jump):
-    """Get pixel ids corresponding to a track."""
-    dr = min(0.1, 0.5 * jump)
-    steps = np.arange(0, jump + dr, dr)  # increment tracks by 0.1 pixel to be exhaustive
-    track = np.array([start_position + r * np.array([np.cos(bearing), np.sin(bearing)])
-                      for r in steps])
-    track = track.round().astype('int')
-    track = np.unique(track, axis=0)
+def get_single_track(start_position, bearing, jump):
+    """Get pixel ids corresponding to a track.
+
+    Parameters
+    ----------
+    start_position: np.ndarray
+        [n_particles, n_dimensions] array of track start positions
+    bearing: np.ndarray
+        [n_particles] array of track bearings for each particle
+    jump: np.ndarray
+        [n_particles] array of track lengths for each particle
+
+    Returns
+    -------
+    track: np.ndarray
+        [n_particles, n_dimensions, n_pixels] array of track start positions
+        as integers
+    """
+
+    # logging.debug('start_position.shape: {}'.format(start_position.shape))
+    # logging.debug('bearing.shape {}: '.format(bearing.shape))
+    # logging.debug('jump.shape {}: '.format(jump.shape))
+
+    logger.info('Track start positions in get_single_track:\n {}'.
+                format(start_position.T))
+
+    # ensure that maximum step size is 0.3, or half the total jump distance
+    min_increment_scalar = 0.3
+    dr = np.where(jump > 2 * min_increment_scalar, min_increment_scalar, 0.5 * jump)
+    n_steps = np.ceil(max(jump / dr)).astype('int')
+
+    # Get 2d array of radial distances away from start position for each particle
+    # This array is of shape (nParticles, nSteps)
+    r = jump[:, np.newaxis] * np.linspace(0, 1, n_steps)
+
+    # Get direction vectors to move along for each particle
+    # This array is of shape (nParticles, nDims), nDims = 2 for x and y
+    direction_vectors = np.hstack([np.cos(bearing[:, np.newaxis]),
+                                   np.sin(bearing[:, np.newaxis])])
+
+    # Get the track
+    # The shape of this array is (nParticles, nDims, nSteps)
+    relative_track = r[:, np.newaxis, :] * direction_vectors[:, :, np.newaxis]
+    track = start_position[:, :, np.newaxis] + relative_track
+
+    # In getting unique elements, the number of steps will reduce
+    track = np.unique(track.round().astype('int'), axis=2)
+
+    # steps = np.arange(0, jump + dr, dr)  # increment tracks by 0.1 pixel to be exhaustive
+    # track = np.array([start_position + r * np.array([np.cos(bearing), np.sin(bearing)])
+    #                   for r in steps])
+    # track = track.round().astype('int')
+    # track = np.unique(track, axis=0)
+
+    # logging.debug('track.shape: {}'.format(track.shape))
 
     return track
 
 
-def is_obstructed(state: np.ndarray, jump: float, le_map: np.ndarray) -> bool:
+def get_parallel_tracks(state: np.ndarray, jump: np.ndarray):
+    """Get two sets of parallel particle tracks.
+
+    Parameters
+    ----------
+    state: np.ndarray
+        numpy array containing [[bearing, x position, y position]], representing
+        the initial state of the object (bearing is in radians). Shape of this
+        array is (nParticles, 3)
+    jump: np.ndarray
+        distance to jump (in pixels) for each particle. Shape of this array
+        is (nParticles,)
+
+    Returns
+    -------
+    track_upper: np.ndarray
+        upper tracks for each particle in state. Shape of this array is
+        (nParticles, nDims, nSteps_upper)
+    track_lower: np.ndarray
+        lower tracks for each particle in state. Shape of this array is
+        (nParticles, nDims, nSteps_lower)
+    """
+    bearing = state[:, 0]
+
+    direction_vectors = np.hstack([-np.sin(bearing[:, np.newaxis]),
+                                   np.cos(bearing[:, np.newaxis])])
+
+    eps = 0.05
+    xy_start_upper = state[:, 1:] + eps * direction_vectors
+    xy_start_lower = state[:, 1:] - eps * direction_vectors
+
+    track_upper = get_single_track(xy_start_upper, bearing, jump)
+    track_lower = get_single_track(xy_start_lower, bearing, jump)
+
+    return track_upper, track_lower
+
+
+def combine_tracks(track_upper: np.ndarray, track_lower: np.ndarray):
+    """Combine two parallel tracks.
+
+    Parameters
+    ----------
+    track_upper: np.ndarray
+        upper tracks for each particle in state. Shape of this array is
+        (nParticles, nDims, nSteps_upper)
+    track_lower: np.ndarray
+        lower tracks for each particle in state. Shape of this array is
+        (nParticles, nDims, nSteps_lower)
+
+    Returns
+    -------
+    track: np.ndarray
+        tracks for each particle in state. Shape of this array is
+        (nParticles, nDims, nSteps_lower + nSteps_upper)
+    """
+
+    # combine the parallel tracks
+    # track = np.unique(np.concatenate((track_upper, track_lower), axis=2),
+    #                   axis=0)
+
+    track = np.concatenate((track_upper, track_lower), axis=2)
+    return track
+
+
+def is_obstructed(state: np.ndarray, jump: np.ndarray, le_map: np.ndarray) -> bool:
     """Evaluate whether the an object has attempted to go through a wall.
 
     Parameters
     ----------
     state: np.ndarray
         numpy array containing [[bearing, x position, y position]], representing
-        the initial state of the object (bearing is in radians)
-    jump: float
-        distance to jump (in pixels)
+        the initial state of the object (bearing is in radians). Shape of this array
+        is (nParticles, 3)
+    jump: np.ndarray
+        distance to jump (in pixels) for each particle. Shape of this array is (nParticles,)
     le_map: np.ndarray
         map over which particle moves, of shape (m, n), containing 0s for passable
         elements and 1 for impassable elements (walls, obstacles, etc.)
 
     Returns
     -------
-    blocked: bool
-        whether or not the input particle would be obstructed by impassable elements
-        in the map in attempting to traverse from its starting position along its bearing
-        by specified jump distance
+    blocked: np.ndarray[bool]
+        whether or not the input particles would be obstructed by impassable elements
+        in the map in attempting to traverse from their starting positions along their
+        respective bearings by specified the jump distance. Shape of this array is (nParticles,)
     """
     # Get list of all the pixels the particle would have to travel through
     # Account for the possibility of hitting the corner of a pixel by perturbing
     # two starting points a small amount perpendicular to its bearing and creating
     # two parallel pixel tracks from these starting points
-    eps = 0.05
-    bearing = state[0]
-    xy_start_upper = state[1:] + eps * np.hstack([-np.sin(bearing), np.cos(bearing)])
-    xy_start_lower = state[1:] - eps * np.hstack([-np.sin(bearing), np.cos(bearing)])
+    track_upper, track_lower = get_parallel_tracks(state, jump)
 
-    track_upper = get_track(xy_start_upper, bearing, jump)
-    track_lower = get_track(xy_start_lower, bearing, jump)
+    logger.info('track_upper start positions in is_obstructed:\n {}'.
+                format(track_upper[:, :, 0].T))
 
     # combine the parallel tracks
-    track = np.unique(np.vstack((track_upper, track_lower)), axis=0)
+    track = combine_tracks(track_upper, track_lower)
 
-    # if track goes out of bounds, then it must be blocked
-    m, n = np.shape(le_map)
-    if (track < 0).any() or (track[:, 0] >= m).any() or (track[:, 1] >= n).any():
-        blocked = True
-    else:
-        # get the passability values from the map
-        track_blocked = le_map[track[:, 0], track[:, 1]]
-        if track_blocked.any():
-            blocked = True
-        else:
-            blocked = False
+    logger.info('Track start positions in is_obstructed:\n {}'.
+                format(track[:, :, 0].T))
 
-    return blocked
+    # logger.debug('track[0, :, :]: {}'.format(track[0, :, :]))
+
+    ## Now use tracks to calculate 'blockedness'
+
+    # Make a duplicate map that is padded with 'impassable values' so that we
+    # can do an all-in-one 'gone off map or gone through wall' calculation
+    pad_width = int(max(jump)) + 1
+    le_map_padded = np.pad(le_map, pad_width,
+                           'constant', constant_values=True)
+
+    logger.debug('pad_width: {}'.format(pad_width))
+    logger.debug('le_map.shape: {}'.format(le_map.shape))
+    logger.debug('le_map_padded.shape: {}'.format(le_map_padded.shape))
+
+    # We have to update the indices of the tracks to account for the pad width
+    track_padded = track + pad_width
+
+    blocked = le_map_padded[track_padded[:, 0, :],
+                            track_padded[:, 1, :]].any(axis=1)
+
+    logger.debug('blocked: {}'.format(blocked))
+
+    # # a track that has gone off the map must be blocked
+    # off_map_left_or_under = (track < 0).any(axis=2).any(axis=1)
+    # off_map_above = (track[:, 0, :] > m).any(axis=1)
+    # off_map_right = (track[:, 1, :] > n).any(axis=1)
+    #
+    # # a track that has gone inside an obstacle is blocked
+    # inside_obstacle = le_map[track[:, 0, :], track[:, 1, :]].any(axis=1)
+    #
+    # blocked = np.vstack(Sff_map_left_or_under,
+    #                      off_map_above,
+    #                      off_map_right,
+    #                      inside_obstacle]).any(axis=0)
+
+    logger.debug('blocked.shape: {}'.format(blocked.shape))
+
+    # if (track < 0).any() or (track[:, 0] >= m).any() or (track[:, 1] >= n).any():
+    #     blocked = True
+    # else:
+    #     # get the passability values from the map
+    #     track_blocked = le_map[track[:, 0], track[:, 1]]
+    #     if track_blocked.any():
+    #         blocked = True
+    #     else:
+    #         blocked = False
+
+    debug_info = dict(track=track,
+                      le_map_padded=le_map_padded,
+                      track_padded=track_padded)
+
+    return blocked, debug_info
 
 
 def generate_route(le_map, n_step=1000, v=None, dt=1):
@@ -225,7 +391,49 @@ def update(pop_in):
         # choice of remaining allowed particles
         pop_out[idx_to_remove, :] = pop_in[idx_replace, :]
 
+    logger.debug('First five particle positions pre-update:\n {}'.format(pop_in[:5, 1:3].T))
+    logger.debug('First five particle positions post-update:\n {}'.format(pop_out[:5, 1:3].T))
+
     return pop_out
+
+
+def generate_particles(le_map: np.ndarray, n_particles: int) -> np.ndarray:
+    """Generate starting positions of particle population.
+
+    Parameters
+    ----------
+    le_map: np.ndarray
+        map over which particle moves, of shape (m, n), containing 0s for passable
+        elements and 1 for impassable elements (walls, obstacles, etc.)
+    n_particles: int
+        number of particles to generate
+
+    Returns
+    -------
+    pop: np.ndarray
+        population of particle starting states, of shape (n_particles, 4)
+
+    """
+    (height, width) = le_map.shape
+
+    # particle states have 4 entries: [bearing in radians, x pos, y pos, is blocked]
+    pop = np.empty((n_particles, 4))
+
+    pop[:, 0] = 2 * np.pi * np.random.rand(n_particles)
+    pop[:, 1] = np.random.randint(0, height, size=n_particles)
+    pop[:, 2] = np.random.randint(0, width, size=n_particles)
+    pop[:, 3] = np.zeros(n_particles)
+
+    # Reset starting positions that land inside walls
+    def is_blocked(): return le_map[pop[:, 1].astype('int'), pop[:, 2].astype('int')]
+
+    while is_blocked().any():
+        blocked = is_blocked()
+        idx_blocked = blocked.nonzero()
+        pop[idx_blocked, 1] = np.random.randint(0, height, blocked.sum())
+        pop[idx_blocked, 2] = np.random.randint(0, width, blocked.sum())
+
+    return pop
 
 
 if __name__ == '__main__':
