@@ -354,6 +354,27 @@ def generate_particles(le_map: np.ndarray, n_particles: int) -> np.ndarray:
     return pop
 
 
+def compute_state_estimate(population: np.ndarray) -> np.ndarray:
+    """Get the mean and standard deviation of particle positions
+
+    Parameters
+    ----------
+    population: np.ndarray
+        Population of particles, with predicted positions
+
+    Returns
+    -------
+    state_estimate: np.ndarray
+        Mean of particle states
+    state_deviation: np.ndarray
+        Standard deviation of particle states
+
+    """
+    state_estimate = np.median(population, axis=0)
+    state_deviation = np.std(population, axis=0)
+    return state_estimate, state_deviation
+
+
 if __name__ == '__main__':
     state = np.array([0.0 * np.pi, 0, 0])
     msz = 100
