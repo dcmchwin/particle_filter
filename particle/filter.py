@@ -1,7 +1,7 @@
 """Functions for particle filter of simple 2D robot."""
 import logging
 import numpy as np
-from typing import List
+from typing import List, Tuple
 
 logger = logging.Logger(__file__)
 logger.setLevel(logging.INFO)
@@ -9,7 +9,11 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 logger.addHandler(ch)
 
-def predict(state_in, u, Q, le_map, dt=1.0):
+def predict(state_in: np.ndarray,
+            u: np.ndarray,
+            Q: np.ndarray,
+            le_map: np.ndarray,
+            dt:float=1.0) -> np.ndarray:
     """Predict next stage of robot movement (turn, then jump).
 
     Parameters
@@ -31,7 +35,6 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     -------
     state_out: np.ndarray
         output state
-
     """
     # account for input dimensionality
     if np.ndim(state_in) == 1:
@@ -66,22 +69,24 @@ def predict(state_in, u, Q, le_map, dt=1.0):
     return state_out
 
 
-def get_single_track(start_position, bearing, jump):
+def get_single_track(start_position: np.ndarray,
+                     bearing: np.ndarray,
+                     jump: np.ndarray) -> np.ndarray:
     """Get pixel ids corresponding to a track.
 
     Parameters
     ----------
     start_position: np.ndarray
-        [n_particles, n_dimensions] array of track start positions
+        (n_particles, n_dimensions) array of track start positions
     bearing: np.ndarray
-        [n_particles] array of track bearings for each particle
+        (n_particles) array of track bearings for each particle
     jump: np.ndarray
-        [n_particles] array of track lengths for each particle
+        (n_particles) array of track lengths for each particle
 
     Returns
     -------
     track: np.ndarray
-        [n_particles, n_dimensions, n_pixels] array of track start positions
+        (n_particles, n_dimensions, n_pixels) array of track start positions
         as integers
     """
     # ensure that maximum step size is 0.3, or half the total jump distance
@@ -109,7 +114,8 @@ def get_single_track(start_position, bearing, jump):
     return track
 
 
-def get_parallel_tracks(state: np.ndarray, jump: np.ndarray):
+def get_parallel_tracks(state: np.ndarray,
+                        jump: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Get two sets of parallel particle tracks.
 
     Parameters
@@ -146,7 +152,8 @@ def get_parallel_tracks(state: np.ndarray, jump: np.ndarray):
     return track_upper, track_lower
 
 
-def combine_tracks(track_upper: np.ndarray, track_lower: np.ndarray):
+def combine_tracks(track_upper: np.ndarray,
+                   track_lower: np.ndarray) -> np.ndarray:
     """Combine two parallel tracks.
 
     Parameters
@@ -169,7 +176,9 @@ def combine_tracks(track_upper: np.ndarray, track_lower: np.ndarray):
     return track
 
 
-def is_obstructed(state: np.ndarray, jump: np.ndarray, le_map: np.ndarray) -> bool:
+def is_obstructed(state: np.ndarray,
+                  jump: np.ndarray,
+                  le_map: np.ndarray) -> np.ndarray:
     """Evaluate whether the an object has attempted to go through a wall.
 
     Parameters
@@ -217,22 +226,42 @@ def is_obstructed(state: np.ndarray, jump: np.ndarray, le_map: np.ndarray) -> bo
     return blocked
 
 
-def generate_route(le_map, n_step=1000, v=None, dt=1):
+def generate_route(le_map: np.ndarray,
+                   n_step:int=1000,
+                   v:float=None,
+                   dt:float=1.0) -> Tuple[np.ndarray,
+                                          np.ndarray,
+                                          np.ndarray,
+                                          float]:
     """Generate a route for a robot through a given map.
 
     Parameters
     ----------
     le_map: np.ndarray
+        map over which particle moves, of shape (m, n), containing 0s for passable
+        elements and 1 for impassable elements (walls, obstacles, etc.)
     n_step: int
+        number of steps in route
     v: float
+        robot speed
     dt: float
+        time interval between steps
 
     Returns
     -------
-    state_history:
-    process_model:
-    Q:
-    dt:
+    state_history: np.ndarray
+        The robot state saved at all steps along the route, of shape (n_steps, 4).
+        The 4 columns of the state history correspond to: [bearing, x position,
+        y position, is_blocked]
+    process_model: np.ndarray
+        The particle velocities (i.e., observations) saved between each step of
+        the state history. The shape of the array is (n_steps - 1, 2). The columns
+        of process_model correspond to [bearing_change, speed]
+    Q: np.ndarray
+        The uncertainty on the process_model, of shape (2); the contents of this
+        array is [bearing change uncertainty, speed uncertainty]
+    dt: float
+        Time interval between steps
 
     """
     height, width = np.shape(le_map)  # extent of map
@@ -276,7 +305,7 @@ def generate_route(le_map, n_step=1000, v=None, dt=1):
     return state_history, process_model, Q, dt
 
 
-def update(pop_in):
+def update(pop_in: np.ndarray) -> np.ndarray:
     """Update the particle states across the whole population.
 
     Assumes that the 'predict' state has just been wrong. Process is to:
@@ -286,12 +315,12 @@ def update(pop_in):
     Parameters
     ----------
     pop_in: np.ndarray
-        n x 4 array of particles
+        n x 4 array of particles (i.e of shape (n_particles, 4))
 
     Returns
     -------
     pop_out: np.ndarray
-        n x 4 array of particles
+        n x 4 array of particles (i.e of shape (n_particles, 4))
     """
     pop_out = pop_in.copy()
 
@@ -330,7 +359,6 @@ def generate_particles(le_map: np.ndarray, n_particles: int) -> np.ndarray:
     -------
     pop: np.ndarray
         population of particle starting states, of shape (n_particles, 4)
-
     """
     (height, width) = le_map.shape
 
@@ -354,7 +382,8 @@ def generate_particles(le_map: np.ndarray, n_particles: int) -> np.ndarray:
     return pop
 
 
-def compute_state_estimate(population: np.ndarray) -> np.ndarray:
+def compute_state_estimate(population: np.ndarray) ->\
+        Tuple[np.ndarray, np.ndarray]:
     """Get the mean and standard deviation of particle positions
 
     Parameters
@@ -368,7 +397,6 @@ def compute_state_estimate(population: np.ndarray) -> np.ndarray:
         Mean of particle states
     state_deviation: np.ndarray
         Standard deviation of particle states
-
     """
     state_estimate = np.median(population, axis=0)
     state_deviation = np.std(population, axis=0)
